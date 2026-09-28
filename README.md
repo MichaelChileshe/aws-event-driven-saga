@@ -198,7 +198,7 @@ For a payments company, "never half-settled, always traceable, replayable withou
 ```
 .
 ├── README.md
-├── env.sh.example                       # copy to ~/p17/env.sh; saved IDs + the save() helper
+├── env.sh.example                       # copy to env.sh (git-ignored); saved IDs + the save() helper
 ├── statemachines/
 │   ├── settlement-saga.asl.json         # STANDARD: reserve, credit, payout (pivot), notify ‖ audit, compensation
 │   └── txn-validate.asl.json            # EXPRESS: ordered Choice rules, direct DynamoDB writes
@@ -232,7 +232,7 @@ For a payments company, "never half-settled, always traceable, replayable withou
     └── screenshots/                     # 26 build, drill and teardown screenshots, in order
 ```
 
-> **No account IDs are committed.** Templates use `@@NAME@@` placeholders filled at run time from values saved in `~/p17/env.sh`. There is no `Deny` statement anywhere in the project.
+> **No account IDs are committed.** Templates use `@@NAME@@` placeholders filled at run time from values saved in `env.sh`. There is no `Deny` statement anywhere in the project.
 
 ---
 
@@ -240,7 +240,7 @@ For a payments company, "never half-settled, always traceable, replayable withou
 
 From WSL, in `us-east-1`, with a second account in the same Organization for the finance side:
 
-1. `mkdir -p ~/p17 && cp -r scripts policies statemachines lambda ~/p17/ && mkdir -p ~/p17/build && cp env.sh.example ~/p17/env.sh && cd ~/p17 && source env.sh`
+1. From the repo folder: `cp env.sh.example env.sh && mkdir -p build && source env.sh`
 2. `python3 scripts/ensure_profile.py finance-admin <finance-account-id>`, then save `ACCOUNT_ID` and `FIN_ACCOUNT_ID`.
 3. **Before:** ledger table + `settlement_monolith.py` (role from `monolith-perms.json.tpl`), then `run_settlements.py MONO 20 --mode monolith` and `check_ledger.py MONO`.
 4. Event bus `nkosi-payments` + archive + the live-feed rule → SQS.

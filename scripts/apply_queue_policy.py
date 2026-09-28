@@ -5,7 +5,7 @@ Usage:  python3 scripts/apply_queue_policy.py <queue-url> <rule-arn> [--profile 
 Allow-only: principal events.amazonaws.com, action sqs:SendMessage, condition aws:SourceArn = the rule.
 """
 import argparse, json, os
-from kit_aws import aws, use_profile
+from kit_aws import ROOT, aws, use_profile
 
 p = argparse.ArgumentParser()
 p.add_argument("queue_url")
@@ -28,8 +28,8 @@ policy = {
     }],
 }
 aws("sqs", "set-queue-attributes", "--queue-url", a.queue_url, "--attributes", json.dumps({"Policy": json.dumps(policy)}))
-os.makedirs(os.path.expanduser("~/p17/build"), exist_ok=True)
+os.makedirs(os.path.join(ROOT, "build"), exist_ok=True)
 name = queue_arn.rsplit(":", 1)[-1]
-with open(os.path.expanduser(f"~/p17/build/queue-policy-{name}.json"), "w") as f:
+with open(os.path.join(ROOT, "build", f"queue-policy-{name}.json"), "w") as f:
     json.dump(policy, f, indent=2)
 print(f"{name}: only {a.rule_arn.split('/')[-1]} may send (copy in build/queue-policy-{name}.json)")
