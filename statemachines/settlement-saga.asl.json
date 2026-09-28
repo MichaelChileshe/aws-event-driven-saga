@@ -1,0 +1,431 @@
+{
+  "Comment": "Nkosi Payments merchant settlement saga: reserve -> ledger credit -> payout (pivot) -> notify + audit. A failure before the payout is compensated in reverse order.",
+  "StartAt": "ReserveFunds",
+  "States": {
+    "ReserveFunds": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-settlement-ledger",
+        "Item": {
+          "settlement_id": {
+            "S.$": "$.settlement_id"
+          },
+          "entry": {
+            "S": "RESERVE"
+          },
+          "merchant_id": {
+            "S.$": "$.merchant_id"
+          },
+          "amount_zar": {
+            "S.$": "$.amount_zar"
+          },
+          "at": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "PostLedgerCredit"
+    },
+    "PostLedgerCredit": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-settlement-ledger",
+        "Item": {
+          "settlement_id": {
+            "S.$": "$.settlement_id"
+          },
+          "entry": {
+            "S": "LEDGER_CREDIT"
+          },
+          "merchant_id": {
+            "S.$": "$.merchant_id"
+          },
+          "amount_zar": {
+            "S.$": "$.amount_zar"
+          },
+          "at": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "ReleaseFunds"
+        }
+      ],
+      "Next": "Payout"
+    },
+    "Payout": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "nkosi-bank-gateway",
+        "Payload": {
+          "settlement_id.$": "$.settlement_id",
+          "amount_zar.$": "$.amount_zar",
+          "scenario.$": "$.scenario",
+          "retry_count.$": "$$.State.RetryCount"
+        }
+      },
+      "ResultSelector": {
+        "bank_ref.$": "$.Payload.bank_ref",
+        "attempt.$": "$.Payload.attempt"
+      },
+      "ResultPath": "$.payout",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "BankTimeout"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        },
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "ReverseLedgerCredit"
+        }
+      ],
+      "Next": "RecordPayout"
+    },
+    "RecordPayout": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-settlement-ledger",
+        "Item": {
+          "settlement_id": {
+            "S.$": "$.settlement_id"
+          },
+          "entry": {
+            "S": "PAYOUT"
+          },
+          "merchant_id": {
+            "S.$": "$.merchant_id"
+          },
+          "amount_zar": {
+            "S.$": "$.amount_zar"
+          },
+          "at": {
+            "S.$": "$$.State.EnteredTime"
+          },
+          "bank_ref": {
+            "S.$": "$.payout.bank_ref"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "NotifyAndAudit"
+    },
+    "NotifyAndAudit": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "PublishSettlementCompleted",
+          "States": {
+            "PublishSettlementCompleted": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::events:putEvents",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "EventBusName": "nkosi-payments",
+                    "Source": "nkosi.settlement",
+                    "DetailType": "SettlementCompleted",
+                    "Detail": {
+                      "settlement_id.$": "$.settlement_id",
+                      "merchant_id.$": "$.merchant_id",
+                      "amount_zar.$": "$.amount_zar",
+                      "bank_ref.$": "$.payout.bank_ref"
+                    }
+                  }
+                ]
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "ResultPath": null,
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "WriteAuditRecord",
+          "States": {
+            "WriteAuditRecord": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:putItem",
+              "Parameters": {
+                "TableName": "nkosi-settlement-ledger",
+                "Item": {
+                  "settlement_id": {
+                    "S.$": "$.settlement_id"
+                  },
+                  "entry": {
+                    "S": "AUDIT"
+                  },
+                  "merchant_id": {
+                    "S.$": "$.merchant_id"
+                  },
+                  "amount_zar": {
+                    "S.$": "$.amount_zar"
+                  },
+                  "at": {
+                    "S.$": "$$.State.EnteredTime"
+                  },
+                  "bank_ref": {
+                    "S.$": "$.payout.bank_ref"
+                  }
+                }
+              },
+              "ResultPath": null,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 5,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null,
+      "Next": "MarkCompleted"
+    },
+    "MarkCompleted": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-settlement-ledger",
+        "Item": {
+          "settlement_id": {
+            "S.$": "$.settlement_id"
+          },
+          "entry": {
+            "S": "STATUS"
+          },
+          "merchant_id": {
+            "S.$": "$.merchant_id"
+          },
+          "amount_zar": {
+            "S.$": "$.amount_zar"
+          },
+          "at": {
+            "S.$": "$$.State.EnteredTime"
+          },
+          "status": {
+            "S": "COMPLETED"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    },
+    "ReverseLedgerCredit": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-settlement-ledger",
+        "Item": {
+          "settlement_id": {
+            "S.$": "$.settlement_id"
+          },
+          "entry": {
+            "S": "LEDGER_REVERSED"
+          },
+          "merchant_id": {
+            "S.$": "$.merchant_id"
+          },
+          "amount_zar": {
+            "S.$": "$.amount_zar"
+          },
+          "at": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "ReleaseFunds"
+    },
+    "ReleaseFunds": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-settlement-ledger",
+        "Item": {
+          "settlement_id": {
+            "S.$": "$.settlement_id"
+          },
+          "entry": {
+            "S": "RESERVE_RELEASED"
+          },
+          "merchant_id": {
+            "S.$": "$.merchant_id"
+          },
+          "amount_zar": {
+            "S.$": "$.amount_zar"
+          },
+          "at": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "MarkCompensated"
+    },
+    "MarkCompensated": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-settlement-ledger",
+        "Item": {
+          "settlement_id": {
+            "S.$": "$.settlement_id"
+          },
+          "entry": {
+            "S": "STATUS"
+          },
+          "merchant_id": {
+            "S.$": "$.merchant_id"
+          },
+          "amount_zar": {
+            "S.$": "$.amount_zar"
+          },
+          "at": {
+            "S.$": "$$.State.EnteredTime"
+          },
+          "status": {
+            "S": "COMPENSATED"
+          },
+          "reason": {
+            "S.$": "$.error.Error"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "PublishSettlementCompensated"
+    },
+    "PublishSettlementCompensated": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Parameters": {
+        "Entries": [
+          {
+            "EventBusName": "nkosi-payments",
+            "Source": "nkosi.settlement",
+            "DetailType": "SettlementCompensated",
+            "Detail": {
+              "settlement_id.$": "$.settlement_id",
+              "merchant_id.$": "$.merchant_id",
+              "amount_zar.$": "$.amount_zar",
+              "reason.$": "$.error.Error"
+            }
+          }
+        ]
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": null,
+      "Next": "SettlementCompensated"
+    },
+    "SettlementCompensated": {
+      "Type": "Fail",
+      "Error": "SettlementCompensated",
+      "Cause": "Payout failed permanently. The ledger credit was reversed and the reserved funds were released."
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "source": ["nkosi.settlement"],
+  "detail-type": ["SettlementCompleted"],
+  "replay-name": [{ "exists": false }]
+}

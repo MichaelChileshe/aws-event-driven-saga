@@ -1,0 +1,181 @@
+{
+  "Comment": "High-volume transaction validation (Express). Triggered by EventBridge for every TransactionReceived event.",
+  "StartAt": "Validate",
+  "States": {
+    "Validate": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Not": {
+            "Variable": "$.detail.txn_id",
+            "IsPresent": true
+          },
+          "Next": "RejectMissingField"
+        },
+        {
+          "Not": {
+            "Variable": "$.detail.merchant_id",
+            "IsPresent": true
+          },
+          "Next": "RejectMissingField"
+        },
+        {
+          "Not": {
+            "Variable": "$.detail.currency",
+            "IsPresent": true
+          },
+          "Next": "RejectMissingField"
+        },
+        {
+          "Not": {
+            "Variable": "$.detail.amount_zar",
+            "IsPresent": true
+          },
+          "Next": "RejectMissingField"
+        },
+        {
+          "Not": {
+            "Variable": "$.detail.currency",
+            "StringEquals": "ZAR"
+          },
+          "Next": "RejectCurrency"
+        },
+        {
+          "Not": {
+            "Variable": "$.detail.amount_zar",
+            "IsNumeric": true
+          },
+          "Next": "RejectAmount"
+        },
+        {
+          "Variable": "$.detail.amount_zar",
+          "NumericLessThanEquals": 0,
+          "Next": "RejectAmount"
+        },
+        {
+          "Not": {
+            "Variable": "$.detail.merchant_id",
+            "StringMatches": "M-*"
+          },
+          "Next": "RejectMerchant"
+        }
+      ],
+      "Default": "Accept"
+    },
+    "Accept": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-txn-validations",
+        "Item": {
+          "txn_id": {
+            "S.$": "$.detail.txn_id"
+          },
+          "status": {
+            "S": "ACCEPTED"
+          },
+          "reason": {
+            "S": "ok"
+          },
+          "validated_at": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "End": true
+    },
+    "RejectMissingField": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-txn-validations",
+        "Item": {
+          "txn_id": {
+            "S.$": "$.detail.txn_id"
+          },
+          "status": {
+            "S": "REJECTED"
+          },
+          "reason": {
+            "S": "missing_field"
+          },
+          "validated_at": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "End": true
+    },
+    "RejectCurrency": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-txn-validations",
+        "Item": {
+          "txn_id": {
+            "S.$": "$.detail.txn_id"
+          },
+          "status": {
+            "S": "REJECTED"
+          },
+          "reason": {
+            "S": "currency_not_zar"
+          },
+          "validated_at": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "End": true
+    },
+    "RejectAmount": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-txn-validations",
+        "Item": {
+          "txn_id": {
+            "S.$": "$.detail.txn_id"
+          },
+          "status": {
+            "S": "REJECTED"
+          },
+          "reason": {
+            "S": "amount_not_positive"
+          },
+          "validated_at": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "End": true
+    },
+    "RejectMerchant": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "nkosi-txn-validations",
+        "Item": {
+          "txn_id": {
+            "S.$": "$.detail.txn_id"
+          },
+          "status": {
+            "S": "REJECTED"
+          },
+          "reason": {
+            "S": "unknown_merchant_format"
+          },
+          "validated_at": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "End": true
+    }
+  }
+}

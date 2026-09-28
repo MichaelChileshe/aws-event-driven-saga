@@ -1,0 +1,4 @@
+{
+  "source": ["nkosi.acquiring"],
+  "detail-type": ["TransactionReceived"]
+}
